@@ -1,0 +1,91 @@
+
+[
+  {
+    "id": "Q001",
+    "question": "What is the difference between a Python list and a tuple?",
+    "skill": "Python",
+    "difficulty": "easy",
+    "question_type": "short_answer",
+    "marks": 2
+  },
+  {
+    "id": "Q002",
+    "question": "Explain Python decorators and give a practical use case.",
+    "skill": "Python",
+    "difficulty": "medium",
+    "question_type": "short_answer",
+    "marks": 5
+  },
+  {
+    "id": "Q003",
+    "question": "Write a Python function to find duplicate elements in a list.",
+    "skill": "Python",
+    "difficulty": "medium",
+    "question_type": "coding",
+    "marks": 5
+  },
+  {
+    "id": "Q004",
+    "question": "What is the purpose of dependency injection in FastAPI?",
+    "skill": "FastAPI",
+    "difficulty": "medium",
+    "question_type": "short_answer",
+    "marks": 5
+  },
+  {
+    "id": "Q005",
+    "question": "How would you validate request data in a FastAPI application?",
+    "skill": "FastAPI",
+    "difficulty": "easy",
+    "question_type": "scenario_based",
+    "marks": 3
+  },
+  {
+    "id": "Q006",
+    "question": "Explain the difference between INNER JOIN and LEFT JOIN in SQL.",
+    "skill": "SQL",
+    "difficulty": "easy",
+    "question_type": "short_answer",
+    "marks": 2
+  },
+  {
+    "id": "Q007",
+    "question": "Write an SQL query to find the second-highest salary.",
+    "skill": "SQL",
+    "difficulty": "medium",
+    "question_type": "coding",
+    "marks": 5
+  },
+  {
+    "id": "Q008",
+    "question": "How would you design pagination for a REST API?",
+    "skill": "REST APIs",
+    "difficulty": "medium",
+    "question_type": "scenario_based",
+    "marks": 5
+  },
+  {
+  "id": "Q009",
+  "question": "Which HTTP status code indicates that a resource has been successfully created?",
+  "skill": "REST APIs",
+  "difficulty": "easy",
+  "question_type": "mcq",
+  "marks": 10,
+  "options": [
+    "200 OK",
+    "201 Created",
+    "400 Bad Request",
+    "404 Not Found"
+  ],
+  "correct_answer": "201 Created",
+  "explanation": "HTTP 201 Created indicates that the request successfully created a new resource."
+},
+  {
+    "id": "Q010",
+    "question": "Explain database indexing and when it can improve query performance.",
+    "skill": "SQL",
+    "difficulty": "hard",
+    "question_type": "scenario_based",
+    "marks": 8
+  }
+]
