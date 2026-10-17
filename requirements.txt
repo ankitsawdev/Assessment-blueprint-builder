@@ -10,3 +10,7 @@ langchain
 python-dotenv
 langchain-core
 langchain-google-genai
+pymongo
+dnspython
+python-docx
+reportlab

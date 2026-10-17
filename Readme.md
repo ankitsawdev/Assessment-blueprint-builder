@@ -88,3 +88,8 @@ Phase 3: Add candidate simulation and feedback-based improvement if time and dat
 The system should not simply generate a list of questions from an LLM. It must use the JD to identify competencies, retrieve suitable existing questions, generate only where coverage is insufficient, validate the assessment, and show why the selected skills and questions are relevant.
 
 This report defines the proposed scope based on the supplied project brief and the initial workflow research. Any changes to scope should be confirmed before implementation to avoid mid-project confusion.
+
+
+
+python -m uvicorn backend.main:app --reload
+python -m streamlit run frontend/app.py

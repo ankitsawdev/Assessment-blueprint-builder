@@ -3,6 +3,7 @@ import json
 import re
 from pathlib import Path
 
+from backend.database.mongodb import get_all_questions
 from backend.schemas.question_schema import (
     Question,
     QuestionGap,
@@ -10,33 +11,52 @@ from backend.schemas.question_schema import (
 )
 
 
-DATA_FILE = Path(__file__).resolve().parent.parent / "data" / "questions.json"
+DATA_FILE = (
+    Path(__file__).resolve().parent.parent
+    / "data"
+    / "questions.json"
+)
 
 
 def normalize(value: str) -> str:
     return re.sub(r"\s+", " ", value.strip()).casefold()
 
 
-def load_questions() -> list[Question]:
+def load_json_questions() -> list[Question]:
+    """Load the original local JSON question bank."""
     if not DATA_FILE.exists():
-        raise FileNotFoundError(
-            f"Question bank not found: {DATA_FILE}"
-        )
+        return []
 
     with DATA_FILE.open("r", encoding="utf-8") as file:
         raw_questions = json.load(file)
 
-    questions = [Question(**item) for item in raw_questions]
+    questions = []
 
-    # Avoid duplicate IDs and duplicate question text.
+    for item in raw_questions:
+        try:
+            questions.append(Question(**item))
+        except Exception:
+            continue
+
+    return questions
+
+
+def load_questions() -> list[Question]:
+    """Combine JSON and MongoDB questions and remove duplicates."""
+    json_questions = load_json_questions()
+    database_questions = get_all_questions()
+
     unique_questions = []
     seen_ids = set()
     seen_texts = set()
 
-    for question in questions:
+    for question in json_questions + database_questions:
         question_text = normalize(question.question)
 
-        if question.id in seen_ids or question_text in seen_texts:
+        if (
+            question.id in seen_ids
+            or question_text in seen_texts
+        ):
             continue
 
         seen_ids.add(question.id)
@@ -46,12 +66,15 @@ def load_questions() -> list[Question]:
     return unique_questions
 
 
-def retrieve_questions(blueprint: dict) -> QuestionRetrievalResponse:
+def retrieve_questions(
+    blueprint: dict,
+) -> QuestionRetrievalResponse:
     skills = blueprint.get("skills", [])
     selected_questions = []
     gaps = []
     used_ids = set()
 
+    # Questions are now retrieved from both sources.
     question_bank = load_questions()
 
     for skill_plan in skills:
@@ -83,27 +106,29 @@ def retrieve_questions(blueprint: dict) -> QuestionRetrievalResponse:
                 and question.difficulty == desired_difficulty
             ]
 
-            # If an exact match is unavailable, prefer matching
-            # question type, then matching difficulty.
+            # First fallback: match question type.
             if len(candidates) < desired_count:
-                used_for_allocation = {q.id for q in candidates}
+                candidate_ids = {q.id for q in candidates}
 
                 extra_candidates = [
-                    q for q in skill_questions
+                    q
+                    for q in skill_questions
                     if q.id not in used_ids
-                    and q.id not in used_for_allocation
+                    and q.id not in candidate_ids
                     and q.question_type == desired_type
                 ]
 
                 candidates.extend(extra_candidates)
 
+            # Second fallback: match difficulty.
             if len(candidates) < desired_count:
-                used_for_allocation = {q.id for q in candidates}
+                candidate_ids = {q.id for q in candidates}
 
                 extra_candidates = [
-                    q for q in skill_questions
+                    q
+                    for q in skill_questions
                     if q.id not in used_ids
-                    and q.id not in used_for_allocation
+                    and q.id not in candidate_ids
                     and q.difficulty == desired_difficulty
                 ]
 

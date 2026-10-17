@@ -3,8 +3,6 @@ import os
 import re
 
 from dotenv import load_dotenv
-from fastapi import HTTPException
-
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import ChatPromptTemplate
 
@@ -16,15 +14,8 @@ from backend.schemas.assessment_schema import (
     QuestionAllocation,
 )
 
+
 load_dotenv()
-
-
-QUESTION_DURATION = {
-    "mcq": 1.5,
-    "coding": 20.0,
-    "short_answer": 5.0,
-    "scenario_based": 10.0,
-}
 
 
 def get_blueprint_chain():
@@ -81,7 +72,7 @@ def normalize_skill(skill: str) -> str:
     return re.sub(r"\s+", " ", skill.strip()).casefold()
 
 
-def distribute_marks(total_marks: int, question_count: int):
+def distribute_marks(total_marks: int, question_count: int) -> list[int]:
     base, remainder = divmod(total_marks, question_count)
 
     return [
@@ -90,41 +81,56 @@ def distribute_marks(total_marks: int, question_count: int):
     ]
 
 
-def distribute_question_types(question_types, total_questions):
+def distribute_question_types(
+    question_types: list[str],
+    total_questions: int,
+) -> list[str]:
     return [
         question_types[i % len(question_types)]
         for i in range(total_questions)
     ]
 
 
-def distribute_difficulties(difficulty, total_questions):
+def distribute_difficulties(
+    difficulty: str,
+    total_questions: int,
+    distribution: dict[str, int],
+) -> list[str]:
     if difficulty != "mixed":
         return [difficulty] * total_questions
 
-    # Approximate mixed distribution: 30% easy,
-    # 50% medium and 20% hard.
-    weights = [0.3, 0.5, 0.2]
-    counts = [int(total_questions * w) for w in weights]
+    counts = {
+        level: (total_questions * percentage) // 100
+        for level, percentage in distribution.items()
+    }
 
-    while sum(counts) < total_questions:
-        index = max(
-            range(3),
-            key=lambda i: total_questions * weights[i] - counts[i]
-        )
-        counts[index] += 1
+    remaining = total_questions - sum(counts.values())
+
+    ranked_levels = sorted(
+        distribution,
+        key=lambda level: (
+            (total_questions * distribution[level]) % 100
+        ),
+        reverse=True,
+    )
+
+    for level in ranked_levels[:remaining]:
+        counts[level] += 1
 
     return (
-        ["easy"] * counts[0]
-        + ["medium"] * counts[1]
-        + ["hard"] * counts[2]
+        ["easy"] * counts["easy"]
+        + ["medium"] * counts["medium"]
+        + ["hard"] * counts["hard"]
     )
 
 
-def normalize_distribution(plan, valid_skills, total_questions):
-    """
-    Convert the AI-proposed skill allocation into an exact,
-    valid allocation without adding unsupported skills.
-    """
+def normalize_distribution(
+    plan,
+    valid_skills: list[str],
+    total_questions: int,
+) -> list[dict]:
+    """Normalize AI skill counts to exactly match total_questions."""
+
     skill_map = {
         normalize_skill(skill): skill
         for skill in valid_skills
@@ -135,10 +141,7 @@ def normalize_distribution(plan, valid_skills, total_questions):
     for item in plan.skill_distribution:
         key = normalize_skill(item.skill)
 
-        if key not in skill_map:
-            continue
-
-        if key in proposed:
+        if key not in skill_map or key in proposed:
             continue
 
         proposed[key] = item
@@ -150,14 +153,16 @@ def normalize_distribution(plan, valid_skills, total_questions):
 
     keys = list(proposed.keys())
 
-    # If there are more skills than questions, prioritize
-    # higher-importance skills.
-    importance_rank = {"high": 0, "medium": 1, "low": 2}
+    importance_rank = {
+        "high": 0,
+        "medium": 1,
+        "low": 2,
+    }
 
     keys.sort(
         key=lambda key: (
             importance_rank[proposed[key].importance],
-            -proposed[key].question_count
+            -proposed[key].question_count,
         )
     )
 
@@ -175,7 +180,7 @@ def normalize_distribution(plan, valid_skills, total_questions):
     while remaining > 0:
         selected = max(
             keys,
-            key=lambda key: weights[key] / counts[key]
+            key=lambda key: weights[key] / counts[key],
         )
 
         counts[selected] += 1
@@ -193,21 +198,19 @@ def normalize_distribution(plan, valid_skills, total_questions):
 
 
 def generate_assessment_blueprint(
-    request: AssessmentRequest
+    request: AssessmentRequest,
 ) -> AssessmentBlueprint:
 
     jd = request.job_description
     config = request.config
 
-    all_skills = list(
-        dict.fromkeys(
-            skill.strip()
-            for skill in (
-                jd.required_skills + jd.preferred_skills
-            )
-            if skill.strip()
+    all_skills = list(dict.fromkeys(
+        skill.strip()
+        for skill in (
+            jd.required_skills + jd.preferred_skills
         )
-    )
+        if skill.strip()
+    ))
 
     if not all_skills:
         raise ValueError(
@@ -217,6 +220,24 @@ def generate_assessment_blueprint(
     if config.total_marks < config.total_questions:
         raise ValueError(
             "Total marks must be at least the number of questions."
+        )
+
+    # Use the user's exact counts when provided.
+    if config.question_type_counts is not None:
+        question_types = [
+            question_type
+            for question_type, count in config.question_type_counts.items()
+            for _ in range(count)
+        ]
+    else:
+        question_types = distribute_question_types(
+            config.question_types,
+            config.total_questions,
+        )
+
+    if len(question_types) != config.total_questions:
+        raise ValueError(
+            "Question type counts must equal total_questions."
         )
 
     chain = get_blueprint_chain()
@@ -232,22 +253,18 @@ def generate_assessment_blueprint(
     skill_distribution = normalize_distribution(
         plan,
         all_skills,
-        config.total_questions
-    )
-
-    types = distribute_question_types(
-        config.question_types,
-        config.total_questions
+        config.total_questions,
     )
 
     difficulties = distribute_difficulties(
         config.difficulty,
-        config.total_questions
+        config.total_questions,
+        config.mixed_difficulty_distribution,
     )
 
     marks = distribute_marks(
         config.total_marks,
-        config.total_questions
+        config.total_questions,
     )
 
     skills = []
@@ -257,7 +274,7 @@ def generate_assessment_blueprint(
         allocations = []
 
         for _ in range(item["question_count"]):
-            question_type = types[question_index]
+            question_type = question_types[question_index]
 
             allocations.append(
                 QuestionAllocation(
@@ -266,7 +283,7 @@ def generate_assessment_blueprint(
                     count=1,
                     marks_per_question=marks[question_index],
                     estimated_minutes_per_question=(
-                        QUESTION_DURATION[question_type]
+                        config.question_duration_minutes[question_type]
                     ),
                 )
             )
@@ -284,7 +301,7 @@ def generate_assessment_blueprint(
         )
 
     estimated_duration = sum(
-        allocation.estimated_minutes_per_question
+        allocation.estimated_minutes_per_question * allocation.count
         for skill in skills
         for allocation in skill.allocations
     )

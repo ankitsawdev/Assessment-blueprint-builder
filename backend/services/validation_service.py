@@ -1,4 +1,5 @@
 
+import re
 from collections import Counter
 
 from backend.schemas.validation_schema import (
@@ -8,10 +9,13 @@ from backend.schemas.validation_schema import (
 )
 
 
+def normalize(value: str) -> str:
+    return re.sub(r"\s+", " ", value.strip()).casefold()
+
+
 def validate_assessment(
     request: AssessmentValidationRequest,
 ) -> AssessmentValidationResponse:
-
     blueprint = request.blueprint
     assessment = request.assessment
 
@@ -19,7 +23,7 @@ def validate_assessment(
     errors = []
     warnings = []
 
-    def add_check(name: str, passed: bool, message: str):
+    def add_check(name: str, passed: bool, message: str) -> None:
         checks.append(
             ValidationCheck(
                 name=name,
@@ -32,48 +36,105 @@ def validate_assessment(
 
     questions = assessment.questions
 
-    # 1. Validate total question count against the blueprint.
+    # 1. Actual question count must match the blueprint.
     expected_count = blueprint.get("total_questions")
+    actual_count = len(questions)
 
     if expected_count is not None:
         add_check(
             "question_count",
-            len(questions) == expected_count,
+            actual_count == expected_count,
             (
                 f"Expected {expected_count} questions; "
-                f"found {len(questions)}."
+                f"found {actual_count}."
             ),
         )
     else:
         warnings.append(
-            "Blueprint mein total_questions field nahi mili; "
-            "exact question count verify nahi kiya ja saka."
+            "Blueprint mein total_questions field nahi mili."
         )
 
-    # 2. Validate total marks.
+    # Also check that the assembly summary matches its question list.
+    add_check(
+        "assembly_question_count",
+        assessment.total_questions == actual_count,
+        (
+            f"Assembly reports {assessment.total_questions} questions, "
+            f"but its question list contains {actual_count}."
+        ),
+    )
+
+    # 2. Marks must match the target and the actual question marks.
+    actual_marks = sum(question.marks for question in questions)
+
+    add_check(
+        "marks_calculation",
+        assessment.total_marks == actual_marks,
+        (
+            f"Assembly reports {assessment.total_marks} marks, "
+            f"but question marks sum to {actual_marks}."
+        ),
+    )
+
     expected_marks = blueprint.get("total_marks")
 
     if expected_marks is not None:
         add_check(
             "total_marks",
-            assessment.total_marks == expected_marks,
+            actual_marks == expected_marks,
             (
                 f"Expected {expected_marks} marks; "
-                f"actual marks are {assessment.total_marks}."
+                f"actual question marks total {actual_marks}."
             ),
         )
     else:
         warnings.append(
-            "Blueprint mein total_marks field nahi mili; "
-            "planned marks verify nahi kiye ja sake."
+            "Blueprint mein total_marks field nahi mili."
         )
 
-    # 3. Validate duplicate question text and IDs.
+    # 3. Validate assessment duration.
+    actual_duration = assessment.duration_minutes
+    expected_duration = blueprint.get("duration_minutes")
+
+    duration_valid = (
+        isinstance(actual_duration, (int, float))
+        and not isinstance(actual_duration, bool)
+        and actual_duration > 0
+    )
+
+    if expected_duration is not None:
+        duration_valid = (
+            duration_valid
+            and actual_duration == expected_duration
+        )
+
+        duration_message = (
+            f"Expected duration {expected_duration} minutes; "
+            f"actual duration is {actual_duration} minutes."
+        )
+    else:
+        duration_message = (
+            f"Assessment duration is {actual_duration} minutes."
+        )
+
+        if actual_duration is None:
+            warnings.append(
+                "Blueprint mein duration_minutes nahi mila; "
+                "sirf assessment duration ki basic validity check ki gayi."
+            )
+
+    add_check(
+        "duration",
+        duration_valid,
+        duration_message,
+    )
+
+    # 4. Check duplicate IDs and question text.
     normalized_texts = [
-        " ".join(q.question.strip().casefold().split())
-        for q in questions
+        normalize(question.question)
+        for question in questions
     ]
-    question_ids = [q.id for q in questions]
+    question_ids = [question.id for question in questions]
 
     duplicate_texts = len(normalized_texts) != len(set(normalized_texts))
     duplicate_ids = len(question_ids) != len(set(question_ids))
@@ -81,45 +142,84 @@ def validate_assessment(
     add_check(
         "duplicate_questions",
         not duplicate_texts and not duplicate_ids,
-        "Duplicate question text or question IDs found."
-        if duplicate_texts or duplicate_ids
-        else "No duplicate question text or IDs found.",
-    )
-
-    # 4. Validate question marks and MCQ structure.
-    invalid_marks = [
-        q.id for q in questions if q.marks < 1
-    ]
-
-    invalid_mcqs = [
-        q.id
-        for q in questions
-        if q.question_type == "mcq"
-        and (
-            len(q.options) < 2
-            or not q.correct_answer
-            or q.correct_answer not in q.options
-        )
-    ]
-
-    add_check(
-        "question_fields",
-        not invalid_marks and not invalid_mcqs,
         (
-            f"Invalid marks for questions: {invalid_marks}. "
-            f"Invalid MCQ options/answers for questions: {invalid_mcqs}."
-            if invalid_marks or invalid_mcqs
-            else "Question marks and MCQ options/answers are valid."
+            "Duplicate question text or question IDs found."
+            if duplicate_texts or duplicate_ids
+            else "No duplicate question text or IDs found."
         ),
     )
 
-    # 5. Validate skill-wise question counts when present in blueprint.
+    # 5. Validate question fields and MCQ answers.
+    invalid_marks = [
+        question.id
+        for question in questions
+        if question.marks < 1
+    ]
+
+    invalid_texts = [
+        question.id
+        for question in questions
+        if not question.question.strip()
+        or not question.skill.strip()
+    ]
+
+    invalid_mcqs = []
+
+    for question in questions:
+        if question.question_type != "mcq":
+            continue
+
+        normalized_options = [
+            normalize(option)
+            for option in question.options
+        ]
+
+        options_are_valid = (
+            len(question.options) >= 2
+            and len(normalized_options) == len(set(normalized_options))
+            and all(option.strip() for option in question.options)
+        )
+
+        answer_is_valid = (
+            bool(question.correct_answer)
+            and question.correct_answer in question.options
+        )
+
+        if not options_are_valid or not answer_is_valid:
+            invalid_mcqs.append(question.id)
+
+    fields_valid = (
+        not invalid_marks
+        and not invalid_texts
+        and not invalid_mcqs
+    )
+
+    add_check(
+        "question_fields",
+        fields_valid,
+        (
+            f"Invalid marks: {invalid_marks}; "
+            f"empty question/skill: {invalid_texts}; "
+            f"invalid MCQs: {invalid_mcqs}."
+            if not fields_valid
+            else "Question marks, text, skills and MCQ answers are valid."
+        ),
+    )
+
+    # 6. Validate skill-wise question counts.
     skill_plans = blueprint.get("skills", [])
-    actual_skill_counts = Counter(q.skill.casefold() for q in questions)
+    actual_skill_counts = Counter(
+        normalize(question.skill)
+        for question in questions
+    )
     skill_count_issues = []
 
     for skill_plan in skill_plans:
-        skill = skill_plan.get("skill", "")
+        skill = skill_plan.get("skill", "").strip()
+
+        if not skill:
+            continue
+
         expected_skill_count = skill_plan.get("question_count")
 
         if expected_skill_count is None:
@@ -134,7 +234,8 @@ def validate_assessment(
             continue
 
         actual_skill_count = actual_skill_counts.get(
-            skill.casefold(), 0
+            normalize(skill),
+            0,
         )
 
         if actual_skill_count != expected_skill_count:
@@ -153,9 +254,10 @@ def validate_assessment(
         ),
     )
 
-    # 6. Check whether question generation left any gaps.
+    # 7. Check question generation gaps.
     remaining_gaps = [
-        gap for gap in assessment.remaining_gaps
+        gap
+        for gap in assessment.remaining_gaps
         if gap.missing > 0
     ]
 
@@ -173,13 +275,6 @@ def validate_assessment(
         ),
     )
 
-    # 7. Duration information check.
-    if not assessment.duration_minutes or assessment.duration_minutes <= 0:
-        warnings.append(
-            "Assessment duration missing or invalid hai."
-        )
-
-    # Warnings don't make an assessment invalid; failed checks do.
     return AssessmentValidationResponse(
         is_valid=not errors,
         checks=checks,
